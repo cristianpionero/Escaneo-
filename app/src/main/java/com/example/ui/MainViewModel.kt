@@ -24,7 +24,7 @@ data class MappingProgress(
     val countdownNumber: Int = 3, // 3, 2, 1
     val isRunning: Boolean = false,
     val photosCaptured: Int = 0,
-    val maxPhotos: Int = 20,
+    val maxPhotos: Int = 15,
     val justTookPhoto: Boolean = false
 )
 
@@ -32,33 +32,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: ProductRepository
 
+    // Catálogo 100% de productos reales del usuario en SQLite
     val allProducts: StateFlow<List<ProductEntity>>
 
-    // Contador de dinero acumulado en la calculadora
+    // Total acumulado en la calculadora
     private val _totalMoney = MutableStateFlow(0L)
     val totalMoney: StateFlow<Long> = _totalMoney.asStateFlow()
 
-    // Estado del mapeo guiado
+    // Progreso del mapeo de fotos
     private val _mappingProgress = MutableStateFlow(MappingProgress())
     val mappingProgress: StateFlow<MappingProgress> = _mappingProgress.asStateFlow()
 
-    // Vectores capturados durante el mapeo de 20 fotos
-    private val capturedVectors = mutableListOf<FloatArray>()
-    private var mappingJob: Job? = null
+    // Estado cuando termina de tomar las 15 fotos y espera a que el usuario escriba nombre y precio
+    private val _isWaitingForDetails = MutableStateFlow(false)
+    val isWaitingForDetails: StateFlow<Boolean> = _isWaitingForDetails.asStateFlow()
 
-    // Campos de configuración de precio y nombre para los productos a registrar
-    var nextProductName = MutableStateFlow("")
+    // Huella vectorial pendiente por guardar
+    private var pendingCentroidVector: FloatArray? = null
+
+    // Campos para nombre y precio ingresados por el usuario
+    var inputProductName = MutableStateFlow("")
         private set
-    var nextProductPriceCop = MutableStateFlow("$ 2.000")
+    var inputProductPrice = MutableStateFlow("")
         private set
 
     // Último producto reconocido en escáner
     private val _lastRecognition = MutableStateFlow<RecognitionResult?>(null)
     val lastRecognition: StateFlow<RecognitionResult?> = _lastRecognition.asStateFlow()
 
-    // LÓGICA ESTRICTA SOLICITADA:
-    // El mismo producto se cuenta una sola vez y no vuelve a sumar a menos que
-    // se pase un producto DIFERENTE.
+    // Mensaje de estado en pantalla
+    private val _userMessage = MutableStateFlow<String?>(null)
+    val userMessage: StateFlow<String?> = _userMessage.asStateFlow()
+
+    private val capturedVectors = mutableListOf<FloatArray>()
+    private var mappingJob: Job? = null
     private var lastScannedProductId: Long? = null
 
     init {
@@ -71,31 +78,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    fun onNextNameChange(name: String) {
-        nextProductName.value = name
+    fun onInputNameChange(name: String) {
+        inputProductName.value = name
     }
 
-    fun onNextPriceChange(rawText: String) {
-        val parsed = CurrencyFormatter.parseCopInput(rawText)
-        nextProductPriceCop.value = if (parsed == 0L && rawText.isBlank()) "" else CurrencyFormatter.formatCop(parsed)
+    fun onInputPriceChange(priceRaw: String) {
+        inputProductPrice.value = priceRaw.filter { it.isDigit() }
     }
 
     /**
-     * Inicia automáticamente el modo de registro:
-     * 1. Contador transparente pequeño 3, 2, 1.
-     * 2. Rastreo de 20 imágenes (1 foto cada 2 segundos).
-     * 3. Al terminar las 20, guarda automáticamente en la base de datos y pasa a modo escáner azul.
+     * Inicia el modo de registro:
+     * 1. Contador transparente 3, 2, 1 (3 segundos).
+     * 2. Toma 15 fotos de la región del recuadro láser.
+     * 3. Al terminar NO guarda automáticamente, sino que activa los recuadros
+     *    en la parte inferior para que el usuario escriba el nombre y el precio.
      */
     fun startAutoRegistration(
         captureFrame: () -> Bitmap?,
         onPhotoTakenSound: () -> Unit,
-        onSuccessSaved: () -> Unit
+        onMappingFinished: () -> Unit
     ) {
         mappingJob?.cancel()
         capturedVectors.clear()
+        _isWaitingForDetails.value = false
+        pendingCentroidVector = null
+        inputProductName.value = ""
+        inputProductPrice.value = ""
 
         mappingJob = viewModelScope.launch {
-            // Fase 1: Contador transparente pequeño 3, 2, 1 (da 3 segundos para acomodar el producto)
+            // Fase 1: Contador 3, 2, 1
             _mappingProgress.value = MappingProgress(
                 isPreparingCountdown = true,
                 countdownNumber = 3,
@@ -103,25 +114,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             for (count in 3 downTo 1) {
                 _mappingProgress.value = _mappingProgress.value.copy(countdownNumber = count)
-                delay(1000)
+                delay(950)
             }
 
-            // Fase 2: Inicia rastreo de 20 fotos (1 cada 2 segundos)
+            // Fase 2: Captura de fotos
+            val totalSteps = 15
             _mappingProgress.value = MappingProgress(
                 isPreparingCountdown = false,
                 isRunning = true,
                 photosCaptured = 0,
-                maxPhotos = 20
+                maxPhotos = totalSteps
             )
 
             var photosCount = 0
-            for (step in 1..20) {
-                // Espera 2 segundos entre foto y foto
-                delay(2000)
+            for (step in 1..totalSteps) {
+                delay(1100)
 
-                val frame = captureFrame()
-                val vector = if (frame != null) {
-                    VisualFingerprintExtractor.extractEmbedding(frame)
+                val rawFrame = captureFrame()
+                val vector = if (rawFrame != null) {
+                    val cropped = VisualFingerprintExtractor.cropToScanRegion(rawFrame)
+                    VisualFingerprintExtractor.extractEmbedding(cropped)
                 } else {
                     FloatArray(VisualFingerprintExtractor.EMBEDDING_DIM) { 0.1f }
                 }
@@ -130,67 +142,94 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 onPhotoTakenSound()
 
-                // Destello visual sutil
                 _mappingProgress.value = _mappingProgress.value.copy(
                     photosCaptured = photosCount,
                     justTookPhoto = true
                 )
-                delay(120)
+                delay(100)
                 _mappingProgress.value = _mappingProgress.value.copy(justTookPhoto = false)
             }
 
-            // Fase 3: Auto-guardado de la huella dactilar de 128 dimensiones en la base de datos
-            val currentCount = allProducts.value.size + 1
-            val name = nextProductName.value.trim().ifBlank { "Producto $currentCount" }
-            val parsedPrice = CurrencyFormatter.parseCopInput(nextProductPriceCop.value)
-            val finalPrice = if (parsedPrice <= 0L) 2000L else parsedPrice
-
-            val centroidVector = if (capturedVectors.isNotEmpty()) {
+            // Fase 3: Promedio del centroide
+            pendingCentroidVector = if (capturedVectors.isNotEmpty()) {
                 VisualFingerprintExtractor.averageVectors(capturedVectors)
             } else {
                 FloatArray(VisualFingerprintExtractor.EMBEDDING_DIM) { 0.5f }
             }
 
-            val entity = ProductEntity(
-                name = name,
-                price = finalPrice,
-                sampleCount = 20,
-                featureVector = VisualFingerprintExtractor.serialize(centroidVector)
-            )
-            repository.insertProduct(entity)
-
-            // Limpia progreso y llama éxito
-            capturedVectors.clear()
+            // Finaliza la captura de fotos y habilita los recuadros de texto abajo
             _mappingProgress.value = MappingProgress()
-            nextProductName.value = ""
-
-            onSuccessSaved()
+            _isWaitingForDetails.value = true
+            onMappingFinished()
         }
     }
 
-    fun cancelAutoRegistration() {
+    /**
+     * Guarda en la base de datos SQLite el producto capturado con el nombre y precio
+     * especificados por el usuario en los recuadros inferiores.
+     */
+    fun confirmSaveProduct(
+        onSuccessSaved: () -> Unit
+    ) {
+        val vector = pendingCentroidVector ?: return
+        val currentCount = allProducts.value.size + 1
+        val name = inputProductName.value.trim().ifBlank { "Producto $currentCount" }
+        val priceLong = inputProductPrice.value.toLongOrNull() ?: 2000L
+
+        viewModelScope.launch {
+            val entity = ProductEntity(
+                name = name,
+                price = priceLong,
+                sampleCount = 15,
+                featureVector = VisualFingerprintExtractor.serialize(vector)
+            )
+            repository.insertProduct(entity)
+
+            // Limpieza de estado
+            capturedVectors.clear()
+            pendingCentroidVector = null
+            _isWaitingForDetails.value = false
+            inputProductName.value = ""
+            inputProductPrice.value = ""
+
+            _userMessage.value = "¡$name guardado en tu base de datos (${CurrencyFormatter.formatCop(priceLong)})!"
+            onSuccessSaved()
+
+            delay(3000)
+            if (_userMessage.value?.startsWith("¡") == true) {
+                _userMessage.value = null
+            }
+        }
+    }
+
+    fun cancelRegistration() {
         mappingJob?.cancel()
         capturedVectors.clear()
+        pendingCentroidVector = null
         _mappingProgress.value = MappingProgress()
+        _isWaitingForDetails.value = false
+        inputProductName.value = ""
+        inputProductPrice.value = ""
     }
 
     /**
-     * Procesa un fotograma en Modo Escáner (Azul).
-     * REGLA ESTRICTA: El mismo producto se cuenta una sola vez y no vuelve a sumar
-     * a menos que pase un producto DIFERENTE.
+     * Escaneo de productos en tiempo real (Modo Azul).
+     * Solo suma dinero cuando se detecta un producto diferente al anterior.
      */
     fun processScanFrame(
         frame: Bitmap,
         onRecognized: (RecognitionResult) -> Unit
     ) {
         val currentProducts = allProducts.value
-        if (currentProducts.isEmpty()) return
+        if (currentProducts.isEmpty() || _isWaitingForDetails.value) return
 
-        val queryVector = VisualFingerprintExtractor.extractEmbedding(frame)
+        val cropped = VisualFingerprintExtractor.cropToScanRegion(frame)
+        if (!VisualFingerprintExtractor.isFrameActive(cropped)) return
+
+        val queryVector = VisualFingerprintExtractor.extractEmbedding(cropped)
         val match = VisualFingerprintExtractor.findBestMatch(queryVector, currentProducts)
 
         if (match != null) {
-            // Si es el mismo producto recién escaneado, el sistema ni se inmuta
             if (match.product.id != lastScannedProductId) {
                 lastScannedProductId = match.product.id
 
@@ -199,7 +238,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 onRecognized(match)
 
-                // Limpia el badge tras 2.5s para no ensuciar la pantalla
                 viewModelScope.launch {
                     delay(2500)
                     if (_lastRecognition.value == match) {
@@ -214,17 +252,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _totalMoney.value = 0L
         lastScannedProductId = null
         _lastRecognition.value = null
-    }
-
-    fun addManualTestScan(product: ProductEntity, onRecognized: (RecognitionResult) -> Unit) {
-        // En simulación manual también respeta la regla de producto diferente
-        if (product.id != lastScannedProductId) {
-            lastScannedProductId = product.id
-            _totalMoney.value += product.price
-            val res = RecognitionResult(product, 0.95f)
-            _lastRecognition.value = res
-            onRecognized(res)
-        }
     }
 
     fun deleteProduct(id: Long) {

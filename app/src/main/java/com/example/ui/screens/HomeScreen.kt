@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
@@ -44,8 +45,12 @@ import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -62,7 +67,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -77,8 +84,8 @@ import com.example.util.CurrencyFormatter
 import kotlinx.coroutines.delay
 
 enum class AppMode {
-    SCAN, // Modo normal de escaneo / cobro (Azul)
-    REGISTER // Modo registrar producto / mapeo 20 fotos (Rojo)
+    SCAN,     // Modo normal de escaneo / cobro (Azul)
+    REGISTER  // Modo registrar producto / fotos guiadas (Rojo)
 }
 
 class ScannerFeedbackController(private val context: Context) {
@@ -190,7 +197,7 @@ fun HomeScreen(
         }
     }
 
-    var cameraSelectorFacing by remember {
+    val cameraSelectorFacing by remember {
         mutableIntStateOf(CameraSelector.LENS_FACING_BACK)
     }
 
@@ -203,15 +210,18 @@ fun HomeScreen(
 
     val totalMoney by viewModel.totalMoney.collectAsStateWithLifecycle()
     val mappingProgress by viewModel.mappingProgress.collectAsStateWithLifecycle()
+    val isWaitingForDetails by viewModel.isWaitingForDetails.collectAsStateWithLifecycle()
     val allProducts by viewModel.allProducts.collectAsStateWithLifecycle()
     val lastRecognition by viewModel.lastRecognition.collectAsStateWithLifecycle()
-    val nextProductPriceCop by viewModel.nextProductPriceCop.collectAsStateWithLifecycle()
+    val userMessage by viewModel.userMessage.collectAsStateWithLifecycle()
+    val inputName by viewModel.inputProductName.collectAsStateWithLifecycle()
+    val inputPrice by viewModel.inputProductPrice.collectAsStateWithLifecycle()
 
-    // Bucle continuo de escaneo en segundo plano en Modo Escaneo
-    LaunchedEffect(currentMode, allProducts) {
-        if (currentMode == AppMode.SCAN && allProducts.isNotEmpty()) {
+    // Bucle continuo de escaneo en tiempo real en Modo Escaneo
+    LaunchedEffect(currentMode, allProducts, isWaitingForDetails) {
+        if (currentMode == AppMode.SCAN && allProducts.isNotEmpty() && !isWaitingForDetails) {
             while (true) {
-                delay(600)
+                delay(550)
                 try {
                     val bitmap = previewViewRef?.bitmap
                     if (bitmap != null) {
@@ -226,11 +236,11 @@ fun HomeScreen(
         }
     }
 
-    // Color del escáner: Azul en Escaneo, Rojo en Registro
+    // Color del escáner: Azul cian neón en Escaneo, Rojo vivo en Registro
     val targetScannerColor = if (currentMode == AppMode.SCAN) {
-        Color(0xFF00E5FF) // Azul cian neón
+        Color(0xFF00E5FF)
     } else {
-        Color(0xFFFF1744) // Rojo vivo para modo registro
+        Color(0xFFFF1744)
     }
 
     val animatedScannerColor by animateColorAsState(
@@ -239,13 +249,13 @@ fun HomeScreen(
         label = "scanner_color"
     )
 
-    // Diálogo con catálogo de productos
+    // DIÁLOGO CON CATÁLOGO DE PRODUCTOS EN BASE DE DATOS
     if (showProductCatalogDialog) {
         androidx.compose.ui.window.Dialog(onDismissRequest = { showProductCatalogDialog = false }) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(RoundedCornerShape(20.dp))
                     .background(Color.White)
                     .padding(20.dp)
             ) {
@@ -255,34 +265,54 @@ fun HomeScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "Catálogo de Productos (${allProducts.size})",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF1E2124)
-                        )
+                        Column {
+                            Text(
+                                text = "Mis Productos Registrados",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1E2124)
+                            )
+                            Text(
+                                text = "${allProducts.size} producto(s) en base de datos",
+                                fontSize = 12.sp,
+                                color = Color(0xFF00897B),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                         IconButton(onClick = { showProductCatalogDialog = false }) {
                             Icon(Icons.Outlined.Close, contentDescription = "Cerrar")
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     if (allProducts.isEmpty()) {
-                        Text(
-                            text = "No hay productos registrados aún. Toca el ícono de la cámara para registrar uno con 20 fotos.",
-                            color = Color.Gray,
-                            fontSize = 14.sp,
-                            modifier = Modifier.padding(vertical = 16.dp)
-                        )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Aún no tienes productos registrados.",
+                                color = Color.Gray,
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Toca el ícono de la cámara arriba para registrar tu primer producto.",
+                                color = Color.Gray.copy(alpha = 0.8f),
+                                fontSize = 12.sp
+                            )
+                        }
                     } else {
                         LazyColumn(modifier = Modifier.height(280.dp)) {
                             items(allProducts, key = { it.id }) { prod ->
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(vertical = 8.dp)
-                                        .clip(RoundedCornerShape(8.dp))
+                                        .padding(vertical = 5.dp)
+                                        .clip(RoundedCornerShape(10.dp))
                                         .background(Color(0xFFF5F7FA))
                                         .padding(12.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -292,38 +322,24 @@ fun HomeScreen(
                                         Text(
                                             text = prod.name,
                                             fontWeight = FontWeight.SemiBold,
-                                            fontSize = 15.sp,
+                                            fontSize = 14.sp,
                                             color = Color(0xFF1E2124)
                                         )
                                         Text(
-                                            text = "${CurrencyFormatter.formatCop(prod.price)} • ${prod.sampleCount} huellas",
+                                            text = CurrencyFormatter.formatCop(prod.price),
                                             color = Color(0xFF00897B),
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Medium
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
                                         )
                                     }
 
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        IconButton(onClick = {
-                                            viewModel.addManualTestScan(prod) {
-                                                feedbackController.playSupermarketBeep()
-                                            }
-                                            showProductCatalogDialog = false
-                                        }) {
-                                            Icon(
-                                                Icons.Default.PlayArrow,
-                                                contentDescription = "Simular paso por caja",
-                                                tint = Color(0xFF00897B)
-                                            )
-                                        }
-
-                                        IconButton(onClick = { viewModel.deleteProduct(prod.id) }) {
-                                            Icon(
-                                                Icons.Default.Delete,
-                                                contentDescription = "Eliminar",
-                                                tint = Color(0xFFE53935)
-                                            )
-                                        }
+                                    IconButton(onClick = { viewModel.deleteProduct(prod.id) }) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = "Eliminar",
+                                            tint = Color(0xFFE53935),
+                                            modifier = Modifier.size(20.dp)
+                                        )
                                     }
                                 }
                             }
@@ -334,14 +350,14 @@ fun HomeScreen(
         }
     }
 
-    // DIVISIÓN PRINCIPAL: 70% Cámara / 30% Blanco Puro
+    // PANTALLA PRINCIPAL: 70% Cámara / 30% Panel Inferior
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(Color.White)
             .testTag("home_screen_container")
     ) {
-        // TOP 70%: Zona de Cámara
+        // TOP 70%: Zona de Cámara con Visor y Retícula
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -395,19 +411,19 @@ fun HomeScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "Activar cámara",
-                        color = Color.White.copy(alpha = 0.6f),
+                        text = "Activar permiso de cámara",
+                        color = Color.White.copy(alpha = 0.8f),
                         fontSize = 14.sp,
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(Color.Black.copy(alpha = 0.4f))
+                            .background(Color.Black.copy(alpha = 0.5f))
                             .clickable { permissionLauncher.launch(Manifest.permission.CAMERA) }
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
                     )
                 }
             }
 
-            // Destello visual de obturador al tomar cada foto
+            // Destello visual al capturar fotos
             if (mappingProgress.justTookPhoto) {
                 Box(
                     modifier = Modifier
@@ -416,33 +432,33 @@ fun HomeScreen(
                 )
             }
 
-            // Retícula y Láser animado (Azul o Rojo según el modo)
+            // Retícula y Láser animado
             ScannerOverlay(
                 modifier = Modifier.fillMaxSize(),
                 laserColor = animatedScannerColor,
                 bracketColor = animatedScannerColor
             )
 
-            // CONTADOR TRANSPARENTE PEQUEÑO 1, 2, 3 AL INICIAR MODO REGISTRO
+            // CONTADOR TRANSPARENTE 3, 2, 1 AL TOCAR LA CÁMARA
             if (currentMode == AppMode.REGISTER && mappingProgress.isPreparingCountdown) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = 90.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.Black.copy(alpha = 0.35f))
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .padding(top = 80.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 22.dp, vertical = 10.dp)
                 ) {
                     Text(
-                        text = "${mappingProgress.countdownNumber}",
-                        color = Color.White.copy(alpha = 0.90f),
-                        fontSize = 24.sp,
+                        text = "Acomoda el producto: ${mappingProgress.countdownNumber}",
+                        color = Color.White,
+                        fontSize = 22.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
             }
 
-            // Barra superior: Bandera de Colombia + Catálogo + Ícono de Cámara para alternar de Modo
+            // Barra superior: Bandera de Colombia + Catálogo + Ícono de Cámara
             val statusBarPadding = WindowInsets.statusBars.asPaddingValues()
             Row(
                 modifier = Modifier
@@ -458,44 +474,42 @@ fun HomeScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ColombiaFlag(modifier = Modifier.testTag("colombia_flag_badge"))
 
-                    if (allProducts.isNotEmpty()) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "${allProducts.size} prods",
-                            color = Color.White.copy(alpha = 0.85f),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color.Black.copy(alpha = 0.5f))
-                                .clickable { showProductCatalogDialog = true }
-                                .padding(horizontal = 7.dp, vertical = 3.dp)
-                        )
-                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "${allProducts.size} productos",
+                        color = Color.White.copy(alpha = 0.90f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .clickable { showProductCatalogDialog = true }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
                         onClick = { showProductCatalogDialog = true },
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(38.dp)
                     ) {
                         Icon(
                             Icons.Outlined.Inventory2,
                             contentDescription = "Ver catálogo",
-                            tint = Color.White.copy(alpha = 0.9f),
-                            modifier = Modifier.size(22.dp)
+                            tint = Color.White.copy(alpha = 0.95f),
+                            modifier = Modifier.size(24.dp)
                         )
                     }
 
                     Spacer(modifier = Modifier.width(6.dp))
 
-                    // LA FORMA EXCLUSIVA DE CAMBIAR DE MODO: ÍCONO DE CÁMARA
+                    // ÍCONO DE CÁMARA: INICIA EN 3 SEGUNDOS EL MAPEO COMO YA LO TENÍAS
                     IconButton(
                         onClick = {
                             feedbackController.triggerModeSwitchHaptic()
                             if (currentMode == AppMode.SCAN) {
                                 currentMode = AppMode.REGISTER
-                                // Inicia automáticamente la preparación de 3 segundos y el rastreo de 20 imágenes
+                                // Inicia inmediatamente la cuenta regresiva de 3 segundos y el mapeo
                                 viewModel.startAutoRegistration(
                                     captureFrame = {
                                         try {
@@ -505,32 +519,33 @@ fun HomeScreen(
                                         }
                                     },
                                     onPhotoTakenSound = { feedbackController.playCameraShutterSound() },
-                                    onSuccessSaved = {
-                                        feedbackController.playSupermarketBeep()
-                                        currentMode = AppMode.SCAN // Retorna automáticamente a modo normal
+                                    onMappingFinished = {
+                                        feedbackController.playCameraShutterSound()
                                     }
                                 )
                             } else {
-                                // Cancela y regresa a modo normal
-                                viewModel.cancelAutoRegistration()
+                                // Si estaba en modo registro, cancela y regresa al escáner azul
+                                viewModel.cancelRegistration()
                                 currentMode = AppMode.SCAN
                             }
                         },
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (currentMode == AppMode.REGISTER) Color(0xFFFF1744) else Color.Black.copy(alpha = 0.45f))
                             .testTag("switch_camera_button")
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.PhotoCamera,
-                            contentDescription = "Modo de cámara",
-                            tint = if (currentMode == AppMode.SCAN) Color.White.copy(alpha = 0.9f) else Color(0xFFFF1744),
-                            modifier = Modifier.size(24.dp)
+                            contentDescription = "Modo cámara",
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }
             }
 
-            // Notificación flotante sutil al detectar producto en Modo Escáner
+            // Notificación de producto reconocido en Modo Escáner
             if (lastRecognition != null && currentMode == AppMode.SCAN) {
                 Box(
                     modifier = Modifier
@@ -538,111 +553,205 @@ fun HomeScreen(
                         .padding(bottom = 16.dp)
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xE6004D40))
-                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                        .padding(horizontal = 16.dp, vertical = 9.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             Icons.Default.CheckCircle,
                             contentDescription = null,
                             tint = Color(0xFF00E676),
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "${lastRecognition?.product?.name}: ${CurrencyFormatter.formatCop(lastRecognition?.product?.price ?: 0)}",
+                            text = "${lastRecognition!!.product.name}: ${CurrencyFormatter.formatCop(lastRecognition!!.product.price)}",
                             color = Color.White,
-                            fontSize = 13.sp,
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
             }
+
+            // Mensajes flotantes del sistema
+            if (userMessage != null && lastRecognition == null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 16.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xD9212121))
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                ) {
+                    Text(
+                        text = userMessage!!,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
         }
 
-        // BOTTOM 30%: Zona Blanca Android con Contador de Dinero y Estado Limpio
+        // BOTTOM 30%: Zona Blanca (Dinero en Escaneo, o Recuadros de Nombre/Precio tras Mapeo)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(0.30f)
                 .background(Color.White)
-                .padding(start = 24.dp, top = 18.dp, end = 24.dp, bottom = 14.dp)
+                .padding(horizontal = 20.dp, vertical = 12.dp)
                 .testTag("money_counter_section")
         ) {
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+            if (isWaitingForDetails) {
+                // CUANDO TERMINA EL MAPEO: SALEN ABAJITO DOS RECUADROS PEQUEÑITOS PARA PONER NOMBRE Y PRECIO, Y BOTÓN GUARDAR
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Contador "$ 0"
                     Text(
-                        text = CurrencyFormatter.formatCop(totalMoney),
-                        color = Color(0xFF00897B),
-                        fontSize = 36.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.5.sp,
-                        modifier = Modifier
-                            .clickable { feedbackController.playSupermarketBeep() }
-                            .testTag("money_counter_display")
+                        text = "15 fotos tomadas. Asigna nombre y precio:",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF1E2124)
                     )
 
-                    // Estado de rastreo o botón de limpiar
-                    if (currentMode == AppMode.REGISTER && mappingProgress.isRunning) {
-                        // "Iniciado rastreo" limpiamente ubicado al lado del contador
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0xFFFBE9E7))
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                text = "Iniciado rastreo (${mappingProgress.photosCaptured}/20)",
-                                color = Color(0xFFD50000),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Recuadro 1: Nombre del producto
+                        OutlinedTextField(
+                            value = inputName,
+                            onValueChange = { viewModel.onInputNameChange(it) },
+                            placeholder = { Text("Nombre", fontSize = 13.sp) },
+                            singleLine = true,
+                            textStyle = TextStyle(fontSize = 14.sp),
+                            modifier = Modifier.weight(0.58f),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFFFF1744),
+                                unfocusedBorderColor = Color.LightGray
                             )
-                        }
-                    } else if (totalMoney > 0L) {
+                        )
+
+                        // Recuadro 2: Precio del producto
+                        OutlinedTextField(
+                            value = inputPrice,
+                            onValueChange = { viewModel.onInputPriceChange(it) },
+                            placeholder = { Text("Precio", fontSize = 13.sp) },
+                            singleLine = true,
+                            textStyle = TextStyle(fontSize = 14.sp),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            prefix = { Text("$", fontSize = 13.sp, color = Color.Gray) },
+                            modifier = Modifier.weight(0.42f),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFFFF1744),
+                                unfocusedBorderColor = Color.LightGray
+                            )
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         TextButton(
                             onClick = {
-                                viewModel.resetMoney()
+                                viewModel.cancelRegistration()
+                                currentMode = AppMode.SCAN
                                 feedbackController.triggerModeSwitchHaptic()
                             }
                         ) {
-                            Icon(
-                                Icons.Default.RestartAlt,
-                                contentDescription = "Limpiar cuenta",
-                                tint = Color.Gray,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Limpiar", color = Color.Gray, fontSize = 13.sp)
+                            Text("Cancelar", color = Color.Gray, fontSize = 12.sp)
+                        }
+
+                        // Botón abajito que dice Guardar
+                        Button(
+                            onClick = {
+                                viewModel.confirmSaveProduct(
+                                    onSuccessSaved = {
+                                        feedbackController.playSupermarketBeep()
+                                        currentMode = AppMode.SCAN
+                                    }
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00897B)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Guardar", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
                     }
                 }
-
-                // Subtexto mínimo y limpio
-                if (currentMode == AppMode.REGISTER) {
-                    if (mappingProgress.isPreparingCountdown) {
-                        Text(
-                            text = "Acomoda el producto frente a la cámara...",
-                            color = Color.Gray,
-                            fontSize = 12.sp
-                        )
-                    } else if (mappingProgress.isRunning) {
-                        Text(
-                            text = "Moviendo el producto... se guardará automáticamente al completar 20",
-                            color = Color.Gray,
-                            fontSize = 12.sp
-                        )
-                    }
-                } else {
+            } else if (currentMode == AppMode.REGISTER && mappingProgress.isRunning) {
+                // Durante la captura de las 15 fotos
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                     Text(
-                        text = if (allProducts.isEmpty()) "Toca el ícono de la cámara para registrar un producto" else "${allProducts.size} producto(s) en catálogo",
-                        color = Color.Gray.copy(alpha = 0.75f),
+                        text = "Mapeando producto: ${mappingProgress.photosCaptured} / ${mappingProgress.maxPhotos} fotos",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFD50000)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Gira suavemente el producto frente al recuadro",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+                }
+            } else {
+                // Modo Escaneo Normal (Azul) con Contador de Dinero
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = CurrencyFormatter.formatCop(totalMoney),
+                            color = Color(0xFF00897B),
+                            fontSize = 36.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp,
+                            modifier = Modifier
+                                .clickable { feedbackController.playSupermarketBeep() }
+                                .testTag("money_counter_display")
+                        )
+
+                        if (totalMoney > 0L) {
+                            TextButton(
+                                onClick = {
+                                    viewModel.resetMoney()
+                                    feedbackController.triggerModeSwitchHaptic()
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.RestartAlt,
+                                    contentDescription = "Limpiar cuenta",
+                                    tint = Color.Gray,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Limpiar", color = Color.Gray, fontSize = 13.sp)
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = if (allProducts.isEmpty()) {
+                            "Toca el ícono de la cámara arriba para registrar tu primer producto"
+                        } else {
+                            "Pasa un producto por el escáner para sumar al total"
+                        },
+                        color = Color.Gray.copy(alpha = 0.85f),
                         fontSize = 12.sp
                     )
                 }
