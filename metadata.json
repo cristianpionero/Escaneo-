@@ -1,0 +1,6 @@
+{
+  "name": "SparkVision Stock",
+  "description": "Calculadora visual y reconocimiento de stock de productos para tiendas",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
